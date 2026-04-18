@@ -4,11 +4,17 @@ import pickle
 import time
 import os
 import sys
+import warnings
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
 
-# 设置页面配置（必须是第一个Streamlit命令）
+# 抑制警告
+warnings.filterwarnings("ignore")
+
+# 设置环境变量
+os.environ['STREAMLIT_RUNNING'] = 'true'
+
+# 设置页面配置
 st.set_page_config(
     page_title="MovieLens 智能推荐系统",
     page_icon="🎬",
@@ -18,7 +24,6 @@ st.set_page_config(
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 # 导入召回模块
 from recall import HybridRecall, ItemCF, UserCF, Popularity
 
@@ -49,12 +54,20 @@ def load_ranking_model():
 
 @st.cache_resource
 def load_recallers():
-    """预加载召回器（避免重复加载）"""
+    """预加载召回器（使用单例模式，只加载一次）"""
+    from recall.item_cf import ItemCF
+    from recall.user_cf import UserCF
+    from recall.popularity import Popularity
+    
+    # 直接实例化，但类内部已经是单例
+    itemcf = ItemCF()
+    usercf = UserCF()
+    popularity = Popularity()
+    
     return {
-        'hybrid': HybridRecall(),
-        'itemcf': ItemCF(),
-        'usercf': UserCF(),
-        'popularity': Popularity()
+        'itemcf': itemcf,
+        'usercf': usercf,
+        'popularity': popularity
     }
 
 
@@ -170,6 +183,13 @@ def main():
         use_ranking = st.checkbox("启用精排模型", value=(ranking_model is not None))
         recall_top_n = st.slider("召回候选数量", 50, 300, 100)
         filter_watched = st.checkbox("过滤已看过的电影", value=True)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📊 评估面板")
+    show_evaluation = st.sidebar.checkbox("显示离线评估结果", value=False)
+    if show_evaluation:
+        eval_k = st.sidebar.selectbox("评估K值", [5, 10, 20], index=1)
+        eval_users_sample = st.sidebar.slider("测试用户数", 50, 500, 200, step=50)
     
     # 系统监控开关
     show_monitor = st.sidebar.checkbox("📊 系统监控面板")
@@ -313,6 +333,112 @@ def main():
                     st.error(f"推荐失败: {str(e)}")
                     st.info("提示：如果是新用户，系统会自动使用热门电影推荐")
     
+        # ==================== 评估结果面板 ====================
+        if show_evaluation:
+            st.divider()
+            st.subheader("📊 离线评估结果")
+            
+            with st.spinner("正在运行评估..."):
+                try:
+                    from evaluate import RecEvaluator
+                    from recall import get_recommendation_func
+                    import numpy as np
+                    
+                    # 初始化评估器
+                    evaluator = RecEvaluator('processed/ratings.parquet')
+                    
+                    # 获取测试用户
+                    ratings_local = ratings_df
+                    user_rating_counts = ratings_local.groupby('userId').size()
+                    test_users_all = user_rating_counts[user_rating_counts >= 50].index.tolist()
+                    
+                    # 采样
+                    if len(test_users_all) > eval_users_sample:
+                        test_users = np.random.choice(test_users_all, eval_users_sample, replace=False).tolist()
+                    else:
+                        test_users = test_users_all
+                    
+                    # 定义要评估的策略
+                    strategies = {
+                        'ItemCF': get_recommendation_func('itemcf'),
+                        'UserCF': get_recommendation_func('usercf'),
+                        '热门电影': get_recommendation_func('popularity'),
+                        '混合召回': get_recommendation_func('hybrid', weights),
+                    }
+                    
+                    # 运行评估
+                    eval_results = {}
+                    for strategy_name, recommend_func in strategies.items():
+                        results = evaluator.evaluate_recommendations(
+                            recommend_func, test_users, [eval_k], train_ratio=0.8, verbose=False
+                        )
+                        eval_results[strategy_name] = results[eval_k]
+                    
+                    # 创建对比表格
+                    comparison_data = []
+                    for strategy_name, metrics in eval_results.items():
+                        comparison_data.append({
+                            '策略': strategy_name,
+                            'Precision': f"{metrics['precision']:.4f}",
+                            'Recall': f"{metrics['recall']:.4f}",
+                            'F1': f"{metrics['f1']:.4f}",
+                            'NDCG': f"{metrics['ndcg']:.4f}",
+                            'Hit Rate': f"{metrics['hit_rate']:.4f}",
+                            'MRR': f"{metrics['mrr']:.4f}"
+                        })
+                    
+                    comparison_df = pd.DataFrame(comparison_data)
+                    st.dataframe(comparison_df, use_container_width=True)
+                    
+                    # 可视化对比
+                    st.markdown("#### 📈 指标对比图")
+                    
+                    # 准备图表数据
+                    plot_data = []
+                    for strategy_name, metrics in eval_results.items():
+                        plot_data.append({
+                            '策略': strategy_name,
+                            '指标': 'Precision@K',
+                            '值': metrics['precision']
+                        })
+                        plot_data.append({
+                            '策略': strategy_name,
+                            '指标': 'Recall@K',
+                            '值': metrics['recall']
+                        })
+                        plot_data.append({
+                            '策略': strategy_name,
+                            '指标': 'F1@K',
+                            '值': metrics['f1']
+                        })
+                        plot_data.append({
+                            '策略': strategy_name,
+                            '指标': 'NDCG@K',
+                            '值': metrics['ndcg']
+                        })
+                    
+                    plot_df = pd.DataFrame(plot_data)
+                    
+                    fig = px.bar(
+                        plot_df, 
+                        x='策略', 
+                        y='值', 
+                        color='指标',
+                        barmode='group',
+                        title=f'不同召回策略在 K={eval_k} 时的表现对比',
+                        color_discrete_sequence=px.colors.qualitative.Set2
+                    )
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # 显示评估信息
+                    st.caption(f"📊 评估基于 {len(test_users)} 个用户（每个用户至少50个评分）")
+                    st.caption(f"🎯 正样本定义: 评分 >= 4.0")
+                    
+                except Exception as e:
+                    st.error(f"评估失败: {str(e)}")
+                    st.info("提示：确保已运行 python run_evaluation.py 或模型已训练完成")
+
     # ==================== 系统监控面板 ====================
     if show_monitor:
         st.divider()

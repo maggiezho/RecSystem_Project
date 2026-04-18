@@ -1,74 +1,90 @@
-from .item_cf import ItemCF
+# recall/__init__.py
+"""
+召回模块
+提供各种召回策略的统一接口
+"""
+
 from .user_cf import UserCF
+from .item_cf import ItemCF
 from .popularity import Popularity
 
-class HybridRecall:
-    """混合召回：加权融合多种召回策略"""
+# 全局实例（单例模式）
+_usercf_instance = None
+_itemcf_instance = None
+_popularity_instance = None
+
+
+def get_recommendation_func(strategy, params=None):
+    """
+    获取推荐函数
     
-    def __init__(self, weights=None):
-        """
-        weights: dict, 各召回策略的权重
-        例如: {'itemcf': 0.5, 'usercf': 0.3, 'pop': 0.2}
-        """
-        self.itemcf = ItemCF()
-        self.usercf = UserCF()
-        self.popularity = Popularity()
-        
-        # 默认权重
-        self.weights = weights or {
-            'itemcf': 0.5,
-            'usercf': 0.3, 
-            'pop': 0.2
-        }
-        
-        # 各策略的召回数量（每个策略召回 top_n * 倍数）
-        self.recall_ratios = {
-            'itemcf': 2,
-            'usercf': 1.5,
-            'pop': 0.5
-        }
+    参数:
+        strategy: 召回策略名称 ('usercf', 'itemcf', 'popularity', 'hybrid')
+        params: 策略参数（用于混合召回）
     
-    def recall(self, user_id, top_n=100):
-        """
-        混合召回，返回融合后的候选电影列表
-        """
-        # 动态计算每个策略需要召回的数量
-        recall_counts = {}
-        for strategy, ratio in self.recall_ratios.items():
-            recall_counts[strategy] = int(top_n * ratio)
-        
-        # 执行各策略召回
-        candidates = {}
-        
-        # ItemCF
-        if self.weights.get('itemcf', 0) > 0:
-            itemcf_recs = self.itemcf.recall(user_id, recall_counts['itemcf'])
-            self._add_candidates(candidates, itemcf_recs, self.weights['itemcf'])
-        
-        # UserCF
-        if self.weights.get('usercf', 0) > 0:
-            usercf_recs = self.usercf.recall(user_id, recall_counts['usercf'])
-            self._add_candidates(candidates, usercf_recs, self.weights['usercf'])
-        
-        # Popularity（冷启动兜底，尤其是新用户）
-        if self.weights.get('pop', 0) > 0:
-            pop_recs = self.popularity.recall(user_id, recall_counts['pop'])
-            self._add_candidates(candidates, pop_recs, self.weights['pop'])
-        
-        # 如果候选不足top_n，补充热门电影
-        if len(candidates) < top_n:
-            extra = self.popularity.recall(user_id, top_n * 2)
-            for movie_id in extra:
-                if movie_id not in candidates:
-                    candidates[movie_id] = candidates.get(movie_id, 0) + 0.01
-        
-        # 排序返回
-        sorted_candidates = sorted(candidates.items(), key=lambda x: x[1], reverse=True)
-        return [movie_id for movie_id, score in sorted_candidates[:top_n]]
+    返回:
+        recommend_func: 推荐函数，签名为 func(user_id, top_n) -> List[int]
+    """
     
-    def _add_candidates(self, candidates, rec_list, weight):
-        """将召回结果加入候选池，带权重"""
-        for rank, movie_id in enumerate(rec_list):
-            # 位置越靠前分数越高
-            position_score = 1.0 / (rank + 1)
-            candidates[movie_id] = candidates.get(movie_id, 0) + weight * position_score
+    if strategy == 'usercf':
+        global _usercf_instance
+        if _usercf_instance is None:
+            _usercf_instance = UserCF()
+        
+        def recommend(user_id, top_n=100, user_history=None):
+            return _usercf_instance.recall(user_id, top_n, user_history)
+        return recommend
+    
+    elif strategy == 'itemcf':
+        global _itemcf_instance
+        if _itemcf_instance is None:
+            _itemcf_instance = ItemCF()
+        
+        def recommend(user_id, top_n=100, user_history=None):
+            return _itemcf_instance.recall(user_id, top_n, user_history)
+        return recommend
+    
+    elif strategy == 'popularity':
+        global _popularity_instance
+        if _popularity_instance is None:
+            _popularity_instance = Popularity()
+        
+        def recommend(user_id, top_n=100, user_history=None):
+            return _popularity_instance.recall(user_id, top_n)
+        return recommend
+    
+    elif strategy == 'hybrid':
+        # 混合召回
+        itemcf_func = get_recommendation_func('itemcf')
+        usercf_func = get_recommendation_func('usercf')
+        pop_func = get_recommendation_func('popularity')
+        
+        weights = params or {'itemcf': 0.5, 'usercf': 0.3, 'pop': 0.2}
+        
+        def recommend(user_id, top_n=100, user_history=None):
+            # 获取各策略的推荐
+            itemcf_recs = itemcf_func(user_id, top_n * 2, user_history)
+            usercf_recs = usercf_func(user_id, top_n * 2, user_history)
+            pop_recs = pop_func(user_id, top_n, user_history)
+            
+            # 合并并去重，计算加权分数
+            all_recs = {}
+            for rec in itemcf_recs:
+                all_recs[rec] = all_recs.get(rec, 0) + weights['itemcf']
+            for rec in usercf_recs:
+                all_recs[rec] = all_recs.get(rec, 0) + weights['usercf']
+            for rec in pop_recs:
+                all_recs[rec] = all_recs.get(rec, 0) + weights['pop']
+            
+            # 按分数排序
+            sorted_recs = sorted(all_recs.items(), key=lambda x: x[1], reverse=True)
+            return [rec for rec, _ in sorted_recs[:top_n]]
+        
+        return recommend
+    
+    else:
+        raise ValueError(f"未知的召回策略: {strategy}")
+
+
+# 为了方便，也可以直接导出各个类
+__all__ = ['UserCF', 'ItemCF', 'Popularity', 'get_recommendation_func']

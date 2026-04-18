@@ -1,34 +1,55 @@
+# recall/popularity.py - 修复版
 import pandas as pd
+import numpy as np
+import os
 
 class Popularity:
-    """热门电影召回（用于冷启动）"""
+    """热门电影召回 - 修复版"""
+    
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Popularity, cls).__new__(cls)
+        return cls._instance
     
     def __init__(self):
-        self.popular_movies = None
+        if hasattr(self, '_initialized'):
+            return
+        
+        self._ratings_cache = None
+        self._popular_movies_cache = None
         self._load_popular()
+        self._initialized = True
     
     def _load_popular(self):
-        """加载热门电影（基于评分数量和平均分）"""
-        ratings = pd.read_parquet('processed/ratings.parquet')
+        """加载热门电影"""
+        print("加载热门电影...")
+        ratings = self._get_ratings()
         
-        # 计算热度分数 = 评分人数 * 平均分
-        stats = ratings.groupby('movieId').agg({
+        # 计算每部电影的平均分和评分人数
+        movie_stats = ratings.groupby('movieId').agg({
             'rating': ['count', 'mean']
-        })
-        stats.columns = ['rating_count', 'rating_mean']
+        }).round(2)
         
-        # 热度分：需要至少50个评分
-        stats['popularity_score'] = stats['rating_count'] * stats['rating_mean']
-        stats = stats[stats['rating_count'] >= 50]
+        movie_stats.columns = ['rating_count', 'rating_mean']
         
-        # 按热度排序
-        stats = stats.sort_values('popularity_score', ascending=False)
-        self.popular_movies = stats.index.tolist()
-        print(f"✅ 热门电影加载完成，共 {len(self.popular_movies)} 部")
+        # 热门分数 = 评分人数 * 平均分
+        movie_stats['popularity_score'] = movie_stats['rating_count'] * movie_stats['rating_mean']
+        
+        # 排序
+        movie_stats = movie_stats.sort_values('popularity_score', ascending=False)
+        
+        self._popular_movies_cache = movie_stats.index.tolist()
+        print(f"✅ 加载了 {len(self._popular_movies_cache)} 部热门电影")
     
     def recall(self, user_id=None, top_n=100):
-        """
-        返回热门电影
-        user_id参数保留是为了接口统一，实际不用
-        """
-        return self.popular_movies[:top_n]
+        """返回热门电影"""
+        return self._popular_movies_cache[:top_n]
+    
+    def _get_ratings(self):
+        """获取评分数据（带简单缓存）"""
+        if self._ratings_cache is None:
+            print("加载评分数据...")
+            self._ratings_cache = pd.read_parquet('processed/ratings.parquet')
+        return self._ratings_cache
