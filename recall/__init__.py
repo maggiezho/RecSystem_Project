@@ -88,3 +88,56 @@ def get_recommendation_func(strategy, params=None):
 
 # 为了方便，也可以直接导出各个类
 __all__ = ['UserCF', 'ItemCF', 'Popularity', 'get_recommendation_func']
+
+class HybridRecall:
+    """混合召回类，封装了混合召回逻辑"""
+    
+    def __init__(self, weights=None):
+        """
+        初始化混合召回
+        
+        参数:
+            weights: 各策略权重，例如 {'itemcf': 0.5, 'usercf': 0.3, 'pop': 0.2}
+        """
+        self.weights = weights or {'itemcf': 0.5, 'usercf': 0.3, 'pop': 0.2}
+        self.itemcf_func = get_recommendation_func('itemcf')
+        self.usercf_func = get_recommendation_func('usercf')
+        self.pop_func = get_recommendation_func('popularity')
+    
+    def recommend(self, user_id, top_n=100, user_history=None):
+        """
+        混合召回推荐
+        
+        参数:
+            user_id: 用户ID
+            top_n: 推荐数量
+            user_history: 用户历史（可选）
+        
+        返回:
+            List[int]: 推荐的item ID列表
+        """
+        # 获取各策略的推荐
+        itemcf_recs = self.itemcf_func(user_id, top_n * 2, user_history)
+        usercf_recs = self.usercf_func(user_id, top_n * 2, user_history)
+        pop_recs = self.pop_func(user_id, top_n, user_history)
+        
+        # 合并并去重，计算加权分数
+        all_recs = {}
+        for rec in itemcf_recs:
+            all_recs[rec] = all_recs.get(rec, 0) + self.weights['itemcf']
+        for rec in usercf_recs:
+            all_recs[rec] = all_recs.get(rec, 0) + self.weights['usercf']
+        for rec in pop_recs:
+            all_recs[rec] = all_recs.get(rec, 0) + self.weights['pop']
+        
+        # 按分数排序
+        sorted_recs = sorted(all_recs.items(), key=lambda x: x[1], reverse=True)
+        return [rec for rec, _ in sorted_recs[:top_n]]
+    
+    def recall(self, user_id, top_n=100, user_history=None):
+        """别名，与UserCF/ItemCF接口保持一致"""
+        return self.recommend(user_id, top_n, user_history)
+
+
+# 更新 __all__
+__all__ = ['UserCF', 'ItemCF', 'Popularity', 'HybridRecall', 'get_recommendation_func']

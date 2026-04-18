@@ -19,6 +19,7 @@ class Popularity:
         
         self._ratings_cache = None
         self._popular_movies_cache = None
+        self.popular_movies = None  # 添加这个属性
         self._load_popular()
         self._initialized = True
     
@@ -41,10 +42,17 @@ class Popularity:
         movie_stats = movie_stats.sort_values('popularity_score', ascending=False)
         
         self._popular_movies_cache = movie_stats.index.tolist()
+        self.popular_movies = self._popular_movies_cache  # 设置属性
         print(f"✅ 加载了 {len(self._popular_movies_cache)} 部热门电影")
     
     def recall(self, user_id=None, top_n=100):
         """返回热门电影"""
+        return self._popular_movies_cache[:top_n]
+    
+    def get_popular_movies(self, top_n=None):
+        """获取热门电影列表（可选方法）"""
+        if top_n is None:
+            return self._popular_movies_cache
         return self._popular_movies_cache[:top_n]
     
     def _get_ratings(self):

@@ -191,8 +191,8 @@ def main():
         eval_k = st.sidebar.selectbox("评估K值", [5, 10, 20], index=1)
         eval_users_sample = st.sidebar.slider("测试用户数", 50, 500, 200, step=50)
     
-    # 系统监控开关
-    show_monitor = st.sidebar.checkbox("📊 系统监控面板")
+    # 数据洞察面板开关
+    show_monitor = st.sidebar.checkbox("📊 数据洞察面板")
     
     # ==================== 主内容区 ====================
     st.title("🎬 MovieLens 智能推荐系统")
@@ -439,34 +439,34 @@ def main():
                     st.error(f"评估失败: {str(e)}")
                     st.info("提示：确保已运行 python run_evaluation.py 或模型已训练完成")
 
-    # ==================== 系统监控面板 ====================
+    # ==================== 数据洞察面板 ====================
     if show_monitor:
         st.divider()
-        st.subheader("📈 系统监控面板")
+        st.subheader("📊 数据洞察面板")
         
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        # 模型状态（最重要）
+        col1, col2, col3 = st.columns(3)
+        col1.success("✅ ItemCF 协同过滤" if recallers['itemcf'].sim_matrix is not None else "❌ ItemCF")
+        col2.success("✅ UserCF 协同过滤" if recallers['usercf'].sim_matrix is not None else "❌ UserCF")
+        col3.success("✅ LightGBM 精排模型" if ranking_model is not None else "⚠️ 精排模型")
         
-        # 数据统计
-        col_m1.metric("📊 电影总数", f"{len(movies_df):,}")
-        col_m2.metric("⭐ 评分总数", f"{len(ratings_df):,}")
-        col_m3.metric("👥 用户总数", f"{ratings_df['userId'].nunique():,}")
-        col_m4.metric("🎯 召回模型", recall_strategy.split()[0])
+        # 数据集覆盖（一行显示即可）
+        st.markdown("---")
+        col_info1, col_info2, col_info3 = st.columns(3)
+        col_info1.metric("🎬 电影库规模", f"{len(movies_df):,} 部")
+        col_info2.metric("👥 用户规模", f"{ratings_df['userId'].nunique():,} 人")
+        col_info3.metric("⭐ 评分数据", f"{len(ratings_df):,} 条")
         
-        # 模型状态
-        st.markdown("#### 🤖 模型状态")
-        col_s1, col_s2, col_s3 = st.columns(3)
-        col_s1.success("✅ ItemCF" if recallers['itemcf'].sim_matrix is not None else "❌ ItemCF")
-        col_s2.success("✅ UserCF" if recallers['usercf'].sim_matrix is not None else "❌ UserCF")
-        col_s3.success("✅ 精排模型" if ranking_model is not None else "⚠️ 精排模型")
+        # 当前推荐配置（实用信息）
+        st.markdown("---")
+        st.markdown("#### ⚙️ 当前推荐配置")
+        st.write(f"- **召回策略**: {recall_strategy}")
+        st.write(f"- **精排模型**: {'已启用' if use_ranking else '未启用'}")
+        st.write(f"- **过滤已看**: {'是' if filter_watched else '否'}")
+        st.write(f"- **召回候选数**: {recall_top_n}")
         
-        # 热门电影Top10
-        st.markdown("#### 🔥 热门电影 Top 10")
-        popular = recallers['popularity'].popular_movies[:10] if recallers['popularity'].popular_movies else []
-        if popular:
-            popular_movies = movies_df[movies_df['movieId'].isin(popular)].copy()
-            popular_movies['popularity_rank'] = popular_movies['movieId'].apply(lambda x: popular.index(x) + 1 if x in popular else 999)
-            popular_movies = popular_movies.sort_values('popularity_rank')
-            st.dataframe(popular_movies[['title', 'genres', 'year']], use_container_width=True)
+        # 提示信息
+        st.caption("💡 **提示**: 数据集为静态的 MovieLens 25M，以上统计基于完整数据集")
 
 
 if __name__ == "__main__":

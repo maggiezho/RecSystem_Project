@@ -8,7 +8,6 @@ import sys
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.cache_utils import smart_cache
 
 
 class ItemCF:
@@ -16,6 +15,9 @@ class ItemCF:
     
     _instance = None
     _loaded = False
+    
+    # 类级别的缓存（与UserCF保持一致）
+    _ratings_cache = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -34,13 +36,16 @@ class ItemCF:
         self._initialized = True
     
     def _load_model(self):
-        """加载预训练的相似度矩阵"""
+        """加载预训练的相似度矩阵，不存在则自动训练"""
+        # 自动训练逻辑
         if not os.path.exists(self.model_path):
             if not ItemCF._loaded:
                 print(f"⚠️ ItemCF模型不存在: {self.model_path}")
-                print("   请先运行 build_item_cf() 训练模型")
-            self.sim_matrix = None
-            return
+                print("   正在自动训练ItemCF模型...")
+            # 自动训练
+            build_item_cf()
+            if not ItemCF._loaded:
+                print("✅ 模型自动训练完成，开始加载...")
         
         # 只在第一次加载时打印
         if not ItemCF._loaded:
@@ -92,10 +97,11 @@ class ItemCF:
         sorted_recs = sorted(recommendations.items(), key=lambda x: x[1], reverse=True)[:top_n]
         return [x[0] for x in sorted_recs]
     
-    @smart_cache
     def _get_ratings(self):
-        """获取评分数据（带缓存）"""
-        return pd.read_parquet('processed/ratings.parquet')
+        """获取评分数据（使用类级别缓存，避免重复加载）"""
+        if ItemCF._ratings_cache is None:
+            ItemCF._ratings_cache = pd.read_parquet('processed/ratings.parquet')
+        return ItemCF._ratings_cache
 
 
 def build_item_cf():
