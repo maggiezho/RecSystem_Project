@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+/data/      # 重要：不要把几百MB甚至GB的数据集上传到Git
+*.zip
+*.csv
