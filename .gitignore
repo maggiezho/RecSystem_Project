@@ -12,3 +12,20 @@ models/
 Thumbs.db
 .vscode/
 .idea/
+# 添加更多忽略规则
+echo "" >> .gitignore
+echo "# 数据和模型文件" >> .gitignore
+echo "ml-25m/" >> .gitignore
+echo "processed/" >> .gitignore
+echo "models/" >> .gitignore
+echo "*.parquet" >> .gitignore
+echo "*.pkl" >> .gitignore
+echo "*.csv" >> .gitignore
+echo "*.zip" >> .gitignore
+echo "" >> .gitignore
+echo "# IDE配置" >> .gitignore
+echo ".vscode/" >> .gitignore
+echo ".idea/" >> .gitignore
+echo "" >> .gitignore
+echo "# 页面文件（如果不需要）" >> .gitignore
+echo "pages/" >> .gitignore

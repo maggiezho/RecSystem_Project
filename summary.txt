@@ -1,0 +1,626 @@
+如图是我推荐算法项目中的文件层次关系，我发现运行后 UserCF:
+  K=5: Precision=0.0000, Recall=0.0000, F1=0.0000, NDCG=0.0000
+  K=10: Precision=0.0000, Recall=0.0000, F1=0.0000, NDCG=0.0000
+  K=20: Precision=0.0000, Recall=0.0000, F1=0.0000, NDCG=0.0000。请分析原因并给出完整的代码修改结果。run_evaluation.py:
+"""
+运行离线评估脚本 - 优化版
+"""
+
+import os
+import sys
+import warnings
+
+# 抑制所有警告
+warnings.filterwarnings("ignore")
+os.environ['STREAMLIT_RUNNING'] = 'false'
+
+# 添加项目路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+import pandas as pd
+import numpy as np
+from evaluate import RecEvaluator
+from recall import get_recommendation_func
+
+
+def run_full_evaluation():
+    """运行完整的评估流程"""
+    
+    # 初始化评估器
+    print("\n📂 加载数据...")
+    evaluator = RecEvaluator('processed/ratings.parquet')
+    
+    # 获取测试用户
+    ratings = pd.read_parquet('processed/ratings.parquet')
+    user_rating_counts = ratings.groupby('userId').size()
+    
+    # 选择至少有50个评分的用户
+    test_users = user_rating_counts[user_rating_counts >= 50].index.tolist()
+    
+    # 动态调整测试用户数量
+    max_test_users = 100  # 减少到100个用户以提高评估速度
+    if len(test_users) > max_test_users:
+        np.random.seed(42)  # 固定随机种子，保证可重复性
+        test_users = np.random.choice(test_users, max_test_users, replace=False).tolist()
+    
+    print(f"📊 测试用户数量: {len(test_users)}")
+    print(f"📊 评估指标: Precision@K, Recall@K, F1@K, NDCG@K, Hit Rate@K, MRR@K")
+    print(f"📊 K值: 5, 10, 20")
+    
+    # 定义要评估的策略（减少策略数量以提高速度）
+    strategies = {
+        'ItemCF': get_recommendation_func('itemcf'),
+        'UserCF': get_recommendation_func('usercf'),
+        '热门电影': get_recommendation_func('popularity'),
+        '混合召回': get_recommendation_func('hybrid', {'itemcf': 0.5, 'usercf': 0.3, 'pop': 0.2}),
+    }
+    
+    # 运行对比评估
+    print("\n" + "=" * 70)
+    print("开始对比评估（这可能需要几分钟）...")
+    print("=" * 70)
+    
+    try:
+        comparison_df = evaluator.compare_strategies(
+            strategies, 
+            test_users, 
+            k_values=[5, 10, 20],
+            train_ratio=0.8
+        )
+        
+        # 保存结果
+        comparison_df.to_csv('evaluation_results.csv', index=False)
+        print("\n✅ 评估结果已保存至 evaluation_results.csv")
+        
+        # 打印结果
+        print("\n" + "=" * 70)
+        print("评估结果汇总")
+        print("=" * 70)
+        
+        for strategy in comparison_df['策略'].unique():
+            print(f"\n📌 {strategy}:")
+            strategy_df = comparison_df[comparison_df['策略'] == strategy]
+            # 格式化输出
+            for _, row in strategy_df.iterrows():
+                print(f"  K={int(row['K'])}: Precision={row['Precision@K']}, Recall={row['Recall@K']}, F1={row['F1@K']}, NDCG={row['NDCG@K']}")
+        
+        return comparison_df
+        
+    except Exception as e:
+        print(f"\n❌ 评估失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def run_detailed_ab_test():
+    """详细的A/B测试模拟 - 优化版"""
+    
+    print("\n" + "=" * 70)
+    print("A/B测试模拟")
+    print("=" * 70)
+    
+    from evaluate import OnlineEvaluator
+    from recall import get_recommendation_func
+    
+    evaluator = OnlineEvaluator()
+    
+    # 加载数据
+    print("\n📂 加载数据...")
+    ratings = pd.read_parquet('processed/ratings.parquet')
+    
+    # 选择有足够评分的用户
+    user_rating_counts = ratings.groupby('userId').size()
+    qualified_users = user_rating_counts[user_rating_counts >= 30].index.tolist()
+    
+    # 减少测试用户数量
+    low_active = [u for u in qualified_users if 30 <= user_rating_counts[u] < 60][:10]
+    mid_active = [u for u in qualified_users if 60 <= user_rating_counts[u] < 120][:10]
+    high_active = [u for u in qualified_users if user_rating_counts[u] >= 120][:10]
+    
+    test_users = low_active + mid_active + high_active
+    
+    print(f"\n📊 测试用户分布:")
+    print(f"  低活跃用户 (30-60评分): {len(low_active)}")
+    print(f"  中活跃用户 (60-120评分): {len(mid_active)}")
+    print(f"  高活跃用户 (120+评分): {len(high_active)}")
+    print(f"  总测试用户: {len(test_users)}")
+    
+    if len(test_users) == 0:
+        print("❌ 没有符合条件的测试用户")
+        return None, {}
+    
+    # 定义多种策略（减少策略数量）
+    strategies = {
+        'ItemCF': get_recommendation_func('itemcf'),
+        'UserCF': get_recommendation_func('usercf'),
+        '热门电影': get_recommendation_func('popularity'),
+        '混合召回': get_recommendation_func('hybrid', {'itemcf': 0.5, 'usercf': 0.3, 'pop': 0.2}),
+    }
+    
+    results = {}
+    
+    for strategy_name, recommend_func in strategies.items():
+        print(f"\n📊 测试策略: {strategy_name}")
+        
+        total_recommendations = 0
+        total_likes = 0
+        successful_users = 0
+        
+        for user_id in test_users:
+            try:
+                # 获取推荐
+                recs = recommend_func(user_id, 10)
+                
+                # 确保有足够的推荐结果
+                if len(recs) < 5:
+                    continue
+                
+                # 获取用户实际评分
+                user_ratings = ratings[ratings['userId'] == user_id]
+                user_watched = dict(zip(user_ratings['movieId'], user_ratings['rating']))
+                
+                for movie_id in recs[:5]:  # 评估前5个推荐
+                    total_recommendations += 1
+                    
+                    if movie_id in user_watched:
+                        # 用户看过，根据评分判断是否喜欢
+                        liked = user_watched[movie_id] >= 4
+                    else:
+                        # 用户没看过，基于电影平均分预测
+                        movie_ratings = ratings[ratings['movieId'] == movie_id]['rating']
+                        if len(movie_ratings) > 0:
+                            movie_avg = movie_ratings.mean()
+                            like_prob = min(0.8, max(0.2, movie_avg / 5))
+                        else:
+                            like_prob = 0.3
+                        liked = np.random.random() < like_prob
+                    
+                    if liked:
+                        total_likes += 1
+                    
+                    evaluator.log_feedback(user_id, movie_id, liked, strategy_name)
+                
+                successful_users += 1
+                
+            except Exception as e:
+                continue
+        
+        # 计算CTR
+        if total_recommendations > 0:
+            ctr = total_likes / total_recommendations
+        else:
+            ctr = 0
+        
+        results[strategy_name] = {
+            'ctr': ctr,
+            'recommendations': total_recommendations,
+            'likes': total_likes,
+            'successful_users': successful_users
+        }
+        
+        print(f"  成功用户: {successful_users}/{len(test_users)}")
+        print(f"  推荐次数: {total_recommendations}")
+        print(f"  喜欢次数: {total_likes}")
+        print(f"  CTR: {ctr:.2%}")
+    
+    # 打印对比结果
+    print("\n" + "=" * 70)
+    print("📊 A/B测试结果")
+    print("=" * 70)
+    
+    if not results:
+        print("❌ 没有有效的测试结果")
+        return evaluator, results
+    
+    # 找出最佳策略
+    valid_results = {k: v for k, v in results.items() if v['recommendations'] > 0}
+    
+    if valid_results:
+        # 创建对比表格
+        comparison = []
+        baseline_name = list(valid_results.keys())[0]
+        baseline_ctr = valid_results[baseline_name]['ctr']
+        
+        for strategy_name, data in valid_results.items():
+            improvement = (data['ctr'] - baseline_ctr) / baseline_ctr if baseline_ctr > 0 else 0
+            comparison.append({
+                '策略': strategy_name,
+                'CTR': f"{data['ctr']:.2%}",
+                '推荐数': data['recommendations'],
+                '喜欢/推荐': f"{data['likes']}/{data['recommendations']}",
+                '相对提升': f"{improvement:+.2%}"
+            })
+        
+        comparison_df = pd.DataFrame(comparison)
+        print(comparison_df.to_string(index=False))
+        
+        # 找出最佳策略
+        best_strategy = max(valid_results.keys(), key=lambda x: valid_results[x]['ctr'])
+        print(f"\n🏆 最佳策略: {best_strategy}")
+        print(f"   CTR: {results[best_strategy]['ctr']:.2%}")
+    else:
+        print("⚠️ 没有策略有有效的推荐结果")
+    
+    return evaluator, results
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("推荐系统评估工具")
+    print("=" * 70)
+    
+    # 运行完整评估
+    results = run_full_evaluation()
+    
+    if results is not None:
+        # 运行A/B测试
+        print("\n")
+        evaluator, ab_results = run_detailed_ab_test()
+        
+        # 保存A/B测试结果
+        if ab_results:
+            ab_summary = []
+            for strategy, data in ab_results.items():
+                ab_summary.append({
+                    '策略': strategy,
+                    'CTR': data['ctr'],
+                    '推荐次数': data['recommendations'],
+                    '喜欢次数': data['likes'],
+                    '成功用户数': data.get('successful_users', 0)
+                })
+            
+            ab_df = pd.DataFrame(ab_summary)
+            ab_df.to_csv('ab_test_results.csv', index=False)
+            print("\n✅ A/B测试结果已保存至 ab_test_results.csv")
+    
+    print("\n" + "=" * 70)
+    print("评估完成！")
+    print("=" * 70)
+
+user_cf.py:
+# recall/user_cf.py
+import pandas as pd
+import numpy as np
+import pickle
+import os
+import sys
+from scipy.sparse import csr_matrix
+from sklearn.metrics.pairwise import cosine_similarity
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 移除 smart_cache 导入
+# from utils.cache_utils import smart_cache
+
+
+class UserCF:
+    """基于用户的协同过滤召回 - 优化版"""
+    
+    _instance = None
+    _loaded = False
+    
+    # 类级别的缓存
+    _ratings_cache = None
+    _movies_cache = None
+    _rating_stats_cache = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(UserCF, cls).__new__(cls)
+        return cls._instance
+    
+    def __init__(self, model_path='models/user_similarity.pkl'):
+        if hasattr(self, '_initialized'):
+            return
+        
+        self.model_path = model_path
+        self.sim_matrix = None
+        self.user_indices = None
+        self.user_map = None
+        self.reverse_user_map = None
+        self.user_means = None
+        self._check_and_train()
+        self._initialized = True
+    
+    def _check_and_train(self):
+        """检查模型是否存在，不存在则训练"""
+        if os.path.exists(self.model_path):
+            self._load_model()
+        else:
+            if not UserCF._loaded:
+                print("⚠️ UserCF模型不存在，开始训练...")
+            self._train()
+            self._load_model()
+    
+    def _train(self):
+        """训练UserCF模型 - 优化版"""
+        if not UserCF._loaded:
+            print("开始训练UserCF模型...")
+        
+        ratings = self._get_ratings()
+        
+        # 选择有足够评分的用户（至少20个评分）
+        user_counts = ratings.groupby('userId').size()
+        active_users = user_counts[user_counts >= 20].index.tolist()
+        
+        # 动态调整用户数量：根据数据量决定
+        max_users = min(len(active_users), 3000)  # 增加到3000个用户
+        if len(active_users) > max_users:
+            active_users = active_users[:max_users]
+        
+        if not UserCF._loaded:
+            print(f"   训练用户数: {len(active_users)}")
+        
+        # 筛选数据
+        ratings_tiny = ratings[ratings['userId'].isin(active_users)]
+        
+        # 选择热门电影（至少被30个用户评分，降低阈值增加候选）
+        movie_counts = ratings_tiny.groupby('movieId').size()
+        popular_movies = movie_counts[movie_counts >= 30].index.tolist()
+        
+        ratings_tiny = ratings_tiny[ratings_tiny['movieId'].isin(popular_movies)]
+        
+        if not UserCF._loaded:
+            print(f"   电影数: {len(popular_movies)}")
+            print(f"   评分记录: {len(ratings_tiny)}")
+        
+        # 创建用户ID映射
+        unique_users = ratings_tiny['userId'].unique()
+        self.user_map = {idx: user_id for idx, user_id in enumerate(unique_users)}
+        self.reverse_user_map = {user_id: idx for idx, user_id in enumerate(unique_users)}
+        
+        # 创建电影ID映射
+        unique_movies = ratings_tiny['movieId'].unique()
+        movie_map = {idx: movie_id for idx, movie_id in enumerate(unique_movies)}
+        reverse_movie_map = {movie_id: idx for idx, movie_id in enumerate(unique_movies)}
+        
+        # 构建用户-电影评分矩阵
+        n_users = len(unique_users)
+        n_movies = len(unique_movies)
+        
+        # 创建稀疏矩阵
+        rows = []
+        cols = []
+        data = []
+        
+        for _, row in ratings_tiny.iterrows():
+            user_idx = self.reverse_user_map[row['userId']]
+            movie_idx = reverse_movie_map[row['movieId']]
+            rows.append(user_idx)
+            cols.append(movie_idx)
+            data.append(row['rating'])
+        
+        user_movie_matrix = csr_matrix((data, (rows, cols)), shape=(n_users, n_movies))
+        
+        if not UserCF._loaded:
+            print(f"   矩阵形状: {user_movie_matrix.shape}")
+        
+        # 归一化评分（减去用户平均分）
+        user_means = np.array(user_movie_matrix.mean(axis=1)).flatten()
+        self.user_means = {self.user_map[i]: user_means[i] for i in range(n_users) if user_means[i] > 0}
+        
+        # 中心化矩阵
+        user_movie_centered = user_movie_matrix.copy()
+        for i in range(n_users):
+            if user_means[i] > 0:
+                row_start = user_movie_centered.indptr[i]
+                row_end = user_movie_centered.indptr[i+1]
+                user_movie_centered.data[row_start:row_end] -= user_means[i]
+        
+        # 计算用户相似度
+        if not UserCF._loaded:
+            print("   计算用户相似度矩阵...")
+        
+        # 使用所有用户，但限制计算范围
+        n_samples = min(n_users, 2000)
+        user_indices = np.random.choice(n_users, n_samples, replace=False) if n_users > n_samples else np.arange(n_users)
+        
+        # 分批计算相似度以避免内存问题
+        batch_size = 500
+        sim_matrix_list = []
+        
+        for start_idx in range(0, len(user_indices), batch_size):
+            end_idx = min(start_idx + batch_size, len(user_indices))
+            batch_indices = user_indices[start_idx:end_idx]
+            batch_sim = cosine_similarity(user_movie_centered[batch_indices])
+            sim_matrix_list.append(batch_sim)
+        
+        # 合并批次
+        sim_matrix = np.vstack(sim_matrix_list) if len(sim_matrix_list) > 1 else sim_matrix_list[0]
+        
+        # 保存模型
+        os.makedirs('models', exist_ok=True)
+        with open(self.model_path, 'wb') as f:
+            pickle.dump({
+                'sim_matrix': sim_matrix,
+                'user_indices': user_indices,
+                'user_map': self.user_map,
+                'reverse_user_map': self.reverse_user_map,
+                'user_means': self.user_means
+            }, f)
+        
+        if not UserCF._loaded:
+            print(f"✅ UserCF模型已保存至 {self.model_path}")
+            print(f"   覆盖用户数: {len(user_indices)}")
+            UserCF._loaded = True
+    
+    def _load_model(self):
+        """加载模型 - 优化版"""
+        if not UserCF._loaded:
+            print(f"正在加载 UserCF 模型...")
+        
+        with open(self.model_path, 'rb') as f:
+            data = pickle.load(f)
+            self.sim_matrix = data['sim_matrix']
+            self.user_indices = data['user_indices']
+            self.user_map = data['user_map']
+            self.reverse_user_map = data['reverse_user_map']
+            self.user_means = data.get('user_means', {})
+        
+        if not UserCF._loaded:
+            print(f"✅ UserCF模型加载成功，覆盖 {len(self.user_indices)} 个用户")
+            UserCF._loaded = True
+    
+    def recall(self, user_id, top_n=100):
+        """基于相似用户召回电影 - 优化版"""
+        
+        # 快速检查
+        if user_id not in self.reverse_user_map:
+            return self._fallback_recall(user_id, top_n)
+        
+        user_idx = self.reverse_user_map[user_id]
+        
+        # 检查用户索引是否在相似度矩阵中
+        if user_idx not in self.user_indices:
+            return self._fallback_recall(user_id, top_n)
+        
+        # 找到用户在相似度矩阵中的位置
+        pos = np.where(self.user_indices == user_idx)[0]
+        if len(pos) == 0:
+            return self._fallback_recall(user_id, top_n)
+        
+        pos = pos[0]
+        
+        # 获取相似度分数
+        sim_scores = self.sim_matrix[pos]
+        
+        # 找到最相似的K个用户（排除自己）
+        k_similar = min(30, len(sim_scores) - 1)
+        similar_indices = np.argsort(sim_scores)[::-1][1:k_similar+1]
+        
+        # 过滤低相似度
+        similar_indices = [idx for idx in similar_indices if sim_scores[idx] > 0.1]
+        
+        if len(similar_indices) == 0:
+            return self._fallback_recall(user_id, top_n)
+        
+        # 获取相似用户的原始索引
+        similar_users = [self.user_indices[idx] for idx in similar_indices]
+        
+        # 加载数据（使用类级别缓存）
+        ratings = self._get_ratings()
+        
+        # 获取用户已看过的电影
+        user_watched = set(ratings[ratings['userId'] == user_id]['movieId'].tolist())
+        
+        # 收集相似用户喜欢的电影（优化：使用字典计数）
+        recommendations = {}
+        
+        for sim_user_idx in similar_users[:20]:
+            sim_user_id = self.user_map[sim_user_idx]
+            # 获取相似度分数
+            sim_pos = np.where(self.user_indices == sim_user_idx)[0]
+            if len(sim_pos) == 0:
+                continue
+            sim_score = sim_scores[sim_pos[0]]
+            
+            # 获取该用户评分高的电影
+            user_movies = ratings[ratings['userId'] == sim_user_id]
+            liked_movies = user_movies[user_movies['rating'] >= 4]['movieId'].tolist()
+            
+            for movie_id in liked_movies[:15]:
+                if movie_id not in user_watched:
+                    recommendations[movie_id] = recommendations.get(movie_id, 0) + sim_score
+        
+        # 如果推荐不足，补充热门电影
+        if len(recommendations) < top_n:
+            from .popularity import Popularity
+            pop = Popularity()
+            hot_movies = pop.recall(None, top_n * 2)
+            for movie_id in hot_movies:
+                if movie_id not in user_watched and movie_id not in recommendations:
+                    recommendations[movie_id] = recommendations.get(movie_id, 0) + 0.01
+        
+        # 排序返回
+        if not recommendations:
+            return self._fallback_recall(user_id, top_n)
+        
+        sorted_recs = sorted(recommendations.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        return [x[0] for x in sorted_recs]
+    
+    def _fallback_recall(self, user_id, top_n=100):
+        """降级召回：基于用户观看历史的体裁推荐 - 优化版"""
+        ratings = self._get_ratings()
+        movies = self._get_movies()
+        
+        user_watched = set(ratings[ratings['userId'] == user_id]['movieId'].tolist())
+        
+        # 如果用户没有观看历史，直接返回热门电影
+        if len(user_watched) == 0:
+            from .popularity import Popularity
+            pop = Popularity()
+            return pop.recall(None, top_n)
+        
+        # 提取用户观看过的电影信息
+        user_movies = movies[movies['movieId'].isin(user_watched)]
+        
+        # 提取用户喜欢的体裁
+        all_genres = []
+        for genres in user_movies['genres'].dropna():
+            if genres and genres != '(no genres listed)':
+                all_genres.extend(genres.split('|'))
+        
+        if len(all_genres) == 0:
+            from .popularity import Popularity
+            pop = Popularity()
+            return pop.recall(None, top_n)
+        
+        from collections import Counter
+        genre_counts = Counter(all_genres)
+        
+        # 取前3个最喜欢的体裁
+        top_genres = [g for g, _ in genre_counts.most_common(3)]
+        
+        # 推荐这些体裁的热门电影
+        genre_movies = set()
+        for genre in top_genres:
+            genre_filter = movies[movies['genres'].str.contains(genre, na=False)]
+            genre_movies.update(genre_filter['movieId'].tolist())
+        
+        # 排除已看过的电影
+        genre_movies = genre_movies - user_watched
+        
+        if len(genre_movies) == 0:
+            from .popularity import Popularity
+            pop = Popularity()
+            return pop.recall(None, top_n)
+        
+        # 计算热度分数（使用缓存的结果）
+        ratings_stats = self._get_rating_stats()
+        
+        # 排序
+        movie_list = list(genre_movies)
+        popularity_scores = [ratings_stats.get(mid, 0) for mid in movie_list]
+        
+        sorted_movies = [mid for _, mid in sorted(zip(popularity_scores, movie_list), reverse=True)]
+        return sorted_movies[:top_n]
+    
+    # 移除 @smart_cache 装饰器，使用类级别缓存
+    def _get_ratings(self):
+        """获取评分数据（带缓存）"""
+        if UserCF._ratings_cache is None:
+            UserCF._ratings_cache = pd.read_parquet('processed/ratings.parquet')
+        return UserCF._ratings_cache
+    
+    def _get_movies(self):
+        """获取电影数据（带缓存）"""
+        if UserCF._movies_cache is None:
+            UserCF._movies_cache = pd.read_parquet('processed/movies.parquet')
+        return UserCF._movies_cache
+    
+    def _get_rating_stats(self):
+        """获取评分统计（带缓存）"""
+        if UserCF._rating_stats_cache is None:
+            ratings = self._get_ratings()
+            stats = ratings.groupby('movieId')['rating'].agg(['count', 'mean'])
+            stats['popularity'] = stats['count'] * stats['mean']
+            UserCF._rating_stats_cache = stats['popularity'].to_dict()
+        return UserCF._rating_stats_cache
+
+
+if __name__ == "__main__":
+    # 快速测试
+    usercf = UserCF()
+    for uid in [1, 100, 1000]:
+        recs = usercf.recall(uid, 5)
+        print(f"User {uid}: {len(recs)} recs")
