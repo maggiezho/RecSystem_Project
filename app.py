@@ -142,10 +142,10 @@ def main():
     # ==================== 侧边栏 ====================
     st.sidebar.title("🎬 推荐控制台")
     st.sidebar.info(
-        "这是一个基于 MovieLens 25M 数据集的双层推荐系统\n\n"
-        "**架构**: 召回层 + 精排层\n"
-        "**召回**: ItemCF + UserCF + 热门电影\n"
-        "**精排**: LightGBM 排序模型"
+        "这是一个基于 MovieLens 25M 数据集的双层推荐系统。\n\n"
+        "- **系统架构**: 召回层 + 精排层\n"
+        "- **召回算法**: ItemCF + UserCF + 热门电影\n"
+        "- **精排模型**: LightGBM 排序模型"
     )
     
     # 用户输入
@@ -313,12 +313,13 @@ def main():
                     else:
                         for idx, row in recommendations.iterrows():
                             with st.expander(f"**{idx+1}. {row['title']}**", expanded=(idx < 3)):
-                                col_m1, col_m2 = st.columns([3, 1])
+                                col_m1, col_m2 = st.columns([2, 1])
                                 with col_m1:
-                                    st.write(f"📅 年份: {int(row['year']) if pd.notna(row['year']) else '未知'}")
-                                    st.write(f"🏷️ 体裁: {row['genres']}")
+                                    st.write(f"📅 **年份**: {int(row['year']) if pd.notna(row['year']) else '未知'}")
+                                    st.write(f"🏷️ **体裁**: {row['genres']}")
                                 with col_m2:
-                                    st.write(f"🎬 电影ID: {row['movieId']}")
+                                    # 这样即使在一行也能非常舒展
+                                    st.write(f"🎬 **电影 ID**: {row['movieId']}")
                                     if use_ranking and ranking_model is not None and 'score' in locals():
                                         st.progress(min(1.0, probs[idx] if idx < len(probs) else 0.5))
                                         st.caption(f"相关度评分: {probs[idx]:.3f}" if idx < len(probs) else "")
