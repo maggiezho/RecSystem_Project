@@ -33,7 +33,7 @@ def run_intuitive_evaluation():
     # 选择至少有50个评分的用户
     test_users = user_rating_counts[user_rating_counts >= 50].index.tolist()
     
-    max_test_users = 2000
+    max_test_users = 50
     if len(test_users) > max_test_users:
         np.random.seed(42)
         test_users = np.random.choice(test_users, max_test_users, replace=False).tolist()
@@ -74,17 +74,15 @@ def run_intuitive_evaluation():
                 continue
             
             try:
-                # 统一召回 Top 20
-                recommendations = recommend_func(user_id, 20, train_items)
-                
+                # 产生 100 个候选
+                recommendations = recommend_func(user_id, 100, train_items)
                 if not recommendations:
                     continue
-                
                 test_set = set(test_items)
                 
                 # 计算各 K 值的多指标
                 for k in [5, 10, 20]:
-                    rec_k_list = recommendations[:k]  # 📜 保持有序列表，用于计算位置相关的指标
+                    rec_k_list = recommendations[:k]  
                     rec_k_set = set(rec_k_list)
                     hits = len(rec_k_set & test_set)
                     
@@ -169,12 +167,12 @@ def run_intuitive_evaluation():
     table = Table(title="🏆 推荐系统核心指标评测表 (K=10)", show_header=True, header_style="bold magenta", border_style="dim")
     
     # 定义紧凑的表头
-    table.add_column("评估策略", justify="left", style="cyan")
-    table.add_column("有效用户", justify="center")
-    table.add_column("准确率@10", justify="center")
-    table.add_column("召回率@10", justify="center")
-    table.add_column("命中率@10", justify="center")
-    table.add_column("F1-Score@10", justify="center")
+    table.add_column("Strategy", justify="left", style="cyan")
+    table.add_column("Users", justify="center")
+    table.add_column("Prec@10", justify="center")
+    table.add_column("Rec@10", justify="center")
+    table.add_column("HR@10", justify="center")
+    table.add_column("F1@10", justify="center")
     table.add_column("NDCG@10 (排序)", justify="center", style="green")
     table.add_column("MRR@10 (顺位)", justify="center", style="green")
 

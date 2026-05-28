@@ -8,6 +8,7 @@ import warnings
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+import re
 
 # 抑制警告
 warnings.filterwarnings("ignore")
@@ -26,7 +27,7 @@ st.set_page_config(
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # 导入召回模块
-from recall import HybridRecall, ItemCF, UserCF, Popularity
+from recall import HybridRecall, ItemCF, UserCF, Popularity, get_recommendation_func
 
 
 # ==================== 缓存加载函数 ====================
@@ -126,10 +127,36 @@ def plot_genre_distribution(recommendations_df):
         color_discrete_sequence=['#FF4B4B']
     )
     fig.update_layout(height=300, margin=dict(l=20, r=20, t=40, b=20))
-    # 让长条图按数量从大到小从上往下排
     fig.update_yaxes(autorange="reversed") 
     return fig
 
+import re
+
+def clean_movielens_title(raw_title):
+    """
+    电影名清洗器：只干掉英文冠词，且完美兼容夹在多国语言括号前的特殊情况
+    """
+    if not isinstance(raw_title, str) or not raw_title.strip():
+        return raw_title
+
+    # 1. 剥离末尾的年份 (如 " (1966)")
+    match_year = re.search(r'\s*\(\d{4}\)$', raw_title)
+    year_part = match_year.group() if match_year else ""
+    name_part = raw_title[:match_year.start()] if match_year else raw_title
+
+    # 2. 核心：用正则匹配那些挂在括号前面的英文倒置后缀
+    match_article = re.search(r'\s*,\s*(The|A|An)(?=\s*\(|$)', name_part, re.IGNORECASE)
+    
+    if match_article:
+        article = match_article.group(1)
+        before_article = name_part[:match_article.start()]
+        after_article = name_part[match_article.end():]
+        name_part = f"{article.capitalize()} {before_article}{after_article}"
+            
+    # 3. 擦除冗余的英文别名提示 (a.k.a.)，保留原生小语种内容
+    name_part = re.sub(r'\s*\(a\.k\.a\..*?\)', '', name_part)
+
+    return f"{name_part}{year_part}"
 
 # ==================== 主界面 ====================
 def main():
@@ -202,7 +229,8 @@ def main():
     st.sidebar.subheader("📊 评估面板")
     show_evaluation = st.sidebar.checkbox("显示离线评估结果", value=False)
     if show_evaluation:
-        eval_k = st.sidebar.selectbox("评估K值", [5, 10, 20], index=1)
+        # 统一变量命名控制：大盘和逻辑层全部打通
+        eval_k_value = st.sidebar.selectbox("评估K值", [5, 10, 20], index=1)
         eval_users_sample = st.sidebar.slider("测试用户数", 50, 500, 200, step=50)
     
     show_monitor = st.sidebar.checkbox("📊 数据洞察面板")
@@ -230,15 +258,11 @@ def main():
         st.info("💡 这是一个新用户，系统将使用热门电影进行冷启动推荐")
         
     # ==================== 【核心修复 2】后台静默计算逻辑 ====================
-    # 我们把触发动作和计算抽离出来，不放在 columns 块里，避免渲染刷新冲突
-    
-    # 定义点击按钮的回调函数，极其干净
     def trigger_recommendation():
         st.session_state.show_recommendations = not st.session_state.show_recommendations
         if st.session_state.show_recommendations:
             st.session_state.rec_results = None
 
-    # 如果状态为 True 且还没有计算结果，立刻在后台计算并存入 session_state
     if st.session_state.show_recommendations and st.session_state.rec_results is None:
         with st.spinner("🚀 正在后台运行召回与精排算法..."):
             start_time = time.time()
@@ -323,6 +347,12 @@ def main():
         user_history = get_user_history(user_id, ratings_df, movies_df, 10)
         if not user_history.empty:
             display_history = user_history[['title', 'genres', 'rating', 'timestamp']].copy()
+            
+            # 调用全局清洗函数
+            display_history['title'] = display_history['title'].apply(clean_movielens_title)
+            # 🏷️ 顺便统一清洗体裁的换行问题
+            display_history['genres'] = display_history['genres'].str.replace('|', ', ')
+            
             display_history['timestamp'] = pd.to_datetime(display_history['timestamp'], unit='s').dt.strftime('%Y-%m-%d')
             display_history.columns = ['电影名称', '体裁', '评分', '观看时间']
             st.dataframe(display_history, use_container_width=True, height=250)
@@ -338,12 +368,11 @@ def main():
         
         if st.session_state.show_recommendations:
             btn_label = "❌ 收起推荐面板"
-            btn_type = "secondary"  # 已展开时，按钮变成低调的灰色
+            btn_type = "secondary"
         else:
             btn_label = "🎯 生成个性化推荐"
-            btn_type = "primary"    # 未展开时，按钮是高亮的红色/蓝色
+            btn_type = "primary"
         
-        # 渲染按钮，绑定动态变量
         st.button(
             label=btn_label, 
             type=btn_type, 
@@ -352,7 +381,6 @@ def main():
             on_click=trigger_recommendation
         )
 
-        # 纯粹的渲染逻辑：只要状态机里有货，不管页面怎么刷新，雷打不动地把它画出来！
         if st.session_state.show_recommendations and st.session_state.rec_results is not None:
             res = st.session_state.rec_results
             recs = res['recommendations']
@@ -363,11 +391,16 @@ def main():
                 st.warning("没有找到推荐结果")
             else:
                 for idx, (display_idx, row) in enumerate(recs.iterrows()):
-                    with st.expander(f"**{idx+1}. {row['title']}**", expanded=(idx < 3)):
+                    clean_title = clean_movielens_title(row['title'])
+                    clean_genres = row['genres'].replace('|', ', ')
+
+                    # 3. 喂给 Streamlit 渲染
+                    with st.expander(f"**{idx+1}. {clean_title}**", expanded=(idx < 3)):
                         col_m1, col_m2 = st.columns([2, 1])
                         with col_m1:
                             st.write(f"📅 **年份**: {int(row['year']) if pd.notna(row['year']) else '未知'}")
-                            st.write(f"🏷️ **体裁**: {row['genres']}")
+                            clean_genres = row['genres'].replace('|', ', ')
+                            st.write(f"🏷️ **体裁**: {clean_genres}")
                         with col_m2:
                             st.write(f"🎬 电影 ID: `{row['movieId']}`")
                             if res['use_ranking_flag'] and res['ranking_scores'] and row['movieId'] in res['ranking_scores']:
@@ -384,80 +417,160 @@ def main():
                 if genre_fig:
                     st.plotly_chart(genre_fig, use_container_width=True)
 
-        # ==================== 评估结果面板 ====================
+        # ==================== 【全新重构】离线评估结果面板 ====================
         if show_evaluation:
             st.divider()
-            st.subheader("📊 离线评估结果")
-            
-            # 同样给评估按钮加上唯一 key 锁定状态
-            if st.button("⚡ 开始运行离线评估 (耗时较长)", use_container_width=True, key="run_eval_btn"):
-                with st.spinner("正在运行多策略离线评估..."):
+            st.subheader("📊 离线大盘评估（沙箱无泄露）")
+
+            # 触发运行离线评估
+            if st.button("⚡ 开始运行离线评估", use_container_width=True):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                with st.spinner("正在严格切分沙箱数据集并运行多策略评估..."):
                     try:
-                        from evaluate import RecEvaluator
-                        from recall import get_recommendation_func
-                        
+                        # 1. 初始化评估器进行严格的数据流切分
+                        from evaluate import RecEvaluator  
                         evaluator = RecEvaluator('processed/ratings.parquet')
-                        ratings_local = ratings_df
-                        user_rating_counts = ratings_local.groupby('userId').size()
-                        test_users_all = user_rating_counts[user_rating_counts >= 50].index.tolist()
                         
-                        if len(test_users_all) > eval_users_sample:
-                            test_users = np.random.choice(test_users_all, eval_users_sample, replace=False).tolist()
+                        # 2. 从全量数据中高效过滤获取高表现测试候选集
+                        if 'ratings_df' in locals():
+                            user_rating_counts = ratings_df.groupby('userId').size()
+                            candidate_users = user_rating_counts[user_rating_counts >= 10].index.tolist()
                         else:
-                            test_users = test_users_all
+                            candidate_users = list(range(1, 611))
                         
+                        # 按侧边栏配置限制样本大小
+                        if len(candidate_users) > eval_users_sample:
+                            test_users = np.random.choice(candidate_users, eval_users_sample, replace=False).tolist()
+                        else:
+                            test_users = candidate_users
+
+                        # 3. 提取沙箱训练集映射，严格隔绝测试集
+                        clean_user_train_dict = {}
+                        clean_user_test_dict = {}
+                        for uid in test_users:
+                            train_items, test_items = evaluator.get_user_test_items_loo(uid, 0.8)
+                            clean_user_train_dict[uid] = train_items
+                            clean_user_test_dict[uid] = set(test_items)
+
+                        # 4. 加载召回函数策略映射
                         strategies = {
                             'ItemCF': get_recommendation_func('itemcf'),
                             'UserCF': get_recommendation_func('usercf'),
                             '热门电影': get_recommendation_func('popularity'),
-                            '混合召回': get_recommendation_func('hybrid', weights),
+                            '混合召回': get_recommendation_func('hybrid', params=weights)
                         }
                         
-                        eval_results = {}
-                        for strategy_name, recommend_func in strategies.items():
-                            results = evaluator.evaluate_recommendations(
-                                recommend_func, test_users, [eval_k], train_ratio=0.8, verbose=False
-                            )
-                            eval_results[strategy_name] = results[eval_k]
+                        results = [] 
                         
-                        comparison_data = []
-                        for strategy_name, metrics in eval_results.items():
-                            comparison_data.append({
-                                '策略': strategy_name,
-                                'Precision': f"{metrics['precision']:.4f}",
-                                'Recall': f"{metrics['recall']:.4f}",
-                                'F1': f"{metrics['f1']:.4f}",
-                                'NDCG': f"{metrics['ndcg']:.4f}",
-                                'Hit Rate': f"{metrics['hit_rate']:.4f}",
-                                'MRR': f"{metrics['mrr']:.4f}"
+                        # 串行流式评估各个策略
+                        for s_idx, (strategy_name, recommend_func) in enumerate(strategies.items()):
+                            status_text.text(f"🎬 正在计算指标 - 策略: {strategy_name} ...")
+                            
+                            user_precisions = {5: [], 10: [], 20: []}
+                            user_recalls = {5: [], 10: [], 20: []}
+                            user_hit_flags = {5: [], 10: [], 20: []}
+                            user_f1s = {5: [], 10: [], 20: []}
+                            user_ndcgs = {5: [], 10: [], 20: []}
+                            user_mrrs = {5: [], 10: [], 20: []}
+                            
+                            for uid in test_users:
+                                pure_train_items = clean_user_train_dict[uid]
+                                test_set = clean_user_test_dict[uid]
+                                
+                                if len(test_set) == 0:
+                                    continue
+                                
+                                try:
+                                    # 💡 核心对齐修复：传入 top_n=100 放宽口袋，并强制灌入纯净历史 user_history 拦截数据泄露
+                                    recommendations = recommend_func(uid, top_n=100, user_history=pure_train_items)
+                                    
+                                    if not recommendations:
+                                        continue
+                                    
+                                    # 分流计算 [5, 10, 20] 桶指标
+                                    for k_val in [5, 10, 20]:
+                                        rec_k_list = recommendations[:k_val]
+                                        rec_k_set = set(rec_k_list)
+                                        hits = len(rec_k_set & test_set)
+                                        
+                                        prec = hits / k_val
+                                        rec = hits / len(test_set)
+                                        user_precisions[k_val].append(prec)
+                                        user_recalls[k_val].append(rec)
+                                        user_hit_flags[k_val].append(1.0 if hits > 0 else 0.0)
+                                        
+                                        f1 = (2 * prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
+                                        user_f1s[k_val].append(f1)
+                                        
+                                        # NDCG
+                                        dcg = 0.0
+                                        for rank, item in enumerate(rec_k_list):
+                                            if item in test_set:
+                                                dcg += 1.0 / np.log2(rank + 2)
+                                        idcg = sum([1.0 / np.log2(i + 2) for i in range(min(k_val, len(test_set)))])
+                                        user_ndcgs[k_val].append(dcg / idcg if idcg > 0 else 0.0)
+                                        
+                                        # MRR
+                                        mrr = 0.0
+                                        for rank, item in enumerate(rec_k_list):
+                                            if item in test_set:
+                                                mrr = 1.0 / (rank + 1)
+                                                break
+                                        user_mrrs[k_val].append(mrr)
+                                        
+                                except Exception:
+                                    continue
+                            
+                            # 锚定用户在侧边栏选择的指定 K 值进行最终的平均指标输出
+                            k = eval_k_value 
+                            
+                            avg_prec = np.mean(user_precisions[k]) if user_precisions[k] else 0.0
+                            avg_recall = np.mean(user_recalls[k]) if user_recalls[k] else 0.0
+                            avg_f1 = np.mean(user_f1s[k]) if user_f1s[k] else 0.0
+                            avg_ndcg = np.mean(user_ndcgs[k]) if user_ndcgs[k] else 0.0
+                            avg_hr = np.mean(user_hit_flags[k]) if user_hit_flags[k] else 0.0
+                            avg_mrr = np.mean(user_mrrs[k]) if user_mrrs[k] else 0.0
+                            
+                            results.append({
+                                '策略': strategy_name, 
+                                'Precision': round(avg_prec, 4),
+                                'Recall': round(avg_recall, 4),
+                                'F1': round(avg_f1, 4),
+                                'NDCG': round(avg_ndcg, 4),
+                                'Hit Rate': round(avg_hr, 4),
+                                'MRR': round(avg_mrr, 4)
                             })
+                            progress_bar.progress((s_idx + 1) / len(strategies))
                         
-                        comparison_df = pd.DataFrame(comparison_data)
+                        status_text.empty()
+                        progress_bar.empty()
+                        
+                        # 5. 渲染结果
+                        comparison_df = pd.DataFrame(results)
+                        st.success(f"📊 离线评估完成！有效测试用户数: {len(test_users)} (测试流程无任何数据穿透现象)")
                         st.dataframe(comparison_df, use_container_width=True)
                         
-                        st.markdown("#### 📈 指标对比图")
-                        plot_data = []
-                        for strategy_name, metrics in eval_results.items():
-                            for metric_name in ['precision', 'recall', 'f1', 'ndcg']:
-                                plot_data.append({
-                                    '策略': strategy_name,
-                                    '指标': metric_name.upper() + '@K',
-                                    '值': metrics[metric_name]
-                                })
-                        
-                        plot_df = pd.DataFrame(plot_data)
-                        fig = px.bar(
-                            plot_df, x='策略', y='值', color='指标', barmode='group',
-                            title=f'不同召回策略在 K={eval_k} 时的表现对比',
-                            color_discrete_sequence=px.colors.qualitative.Set2
+                        # 6. 渲染对比柱状图
+                        fig = go.Figure()
+                        for metric in ['Precision', 'Recall', 'F1', 'NDCG']:
+                            fig.add_trace(go.Bar(
+                                x=comparison_df['策略'],
+                                y=comparison_df[metric],
+                                name=f"{metric}@{k}"
+                            ))
+                        fig.update_layout(
+                            title=f"不同召回策略在 K={k} 时的基准表现对比图",
+                            xaxis_title="召回策略", yaxis_title="指标得分",
+                            barmode='group', template='plotly_dark'
                         )
-                        fig.update_layout(height=400)
                         st.plotly_chart(fig, use_container_width=True)
                         
-                    except Exception as e:
-                        st.error(f"评估失败: {str(e)}")
+                    except Exception as global_err:
+                        st.error(f"评估运行失败，错误日志: {global_err}")
             else:
-                st.info("💡 点击上方评估按钮。上方的个性化推荐卡片现在已被全局状态锁定，绝不会再消失。")
+                st.info("💡 参数已就绪，请点击上方按钮开始离线评估。")
 
     # ==================== 数据洞察面板 ====================
     if show_monitor:

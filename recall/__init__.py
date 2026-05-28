@@ -62,21 +62,30 @@ def get_recommendation_func(strategy, params=None):
         weights = params or {'itemcf': 0.5, 'usercf': 0.3, 'pop': 0.2}
         
         def recommend(user_id, top_n=100, user_history=None):
-            # 获取各策略的推荐
+            # 获取各策略的推荐（保持有序列表形式）
             itemcf_recs = itemcf_func(user_id, top_n * 2, user_history)
             usercf_recs = usercf_func(user_id, top_n * 2, user_history)
             pop_recs = pop_func(user_id, top_n, user_history)
             
-            # 合并并去重，计算加权分数
             all_recs = {}
-            for rec in itemcf_recs:
-                all_recs[rec] = all_recs.get(rec, 0) + weights['itemcf']
-            for rec in usercf_recs:
-                all_recs[rec] = all_recs.get(rec, 0) + weights['usercf']
-            for rec in pop_recs:
-                all_recs[rec] = all_recs.get(rec, 0) + weights['pop']
+            k_smooth = 60
             
-            # 按分数排序
+            # 1. ItemCF 倒数顺位加权
+            for rank, rec in enumerate(itemcf_recs):
+                rrf_score = 1.0 / (k_smooth + rank + 1)
+                all_recs[rec] = all_recs.get(rec, 0) + weights['itemcf'] * rrf_score
+                
+            # 2. UserCF 倒数顺位加权
+            for rank, rec in enumerate(usercf_recs):
+                rrf_score = 1.0 / (k_smooth + rank + 1)
+                all_recs[rec] = all_recs.get(rec, 0) + weights['usercf'] * rrf_score
+                
+            # 3. Popularity 倒数顺位加权
+            for rank, rec in enumerate(pop_recs):
+                rrf_score = 1.0 / (k_smooth + rank + 1)
+                all_recs[rec] = all_recs.get(rec, 0) + weights['pop'] * rrf_score
+            
+            # 按计算后的混合 RRF 分数重新从大到小排序
             sorted_recs = sorted(all_recs.items(), key=lambda x: x[1], reverse=True)
             return [rec for rec, _ in sorted_recs[:top_n]]
         

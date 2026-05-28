@@ -29,7 +29,7 @@ if os.path.exists(TARGET_FILE):
     
     with tab_k10:
         st.markdown("##### 💡 黄金标准 K=10 下的策略表现")
-        # 仅抽取 K=10 相关的核心指标，控制台和页面都不再拥挤
+        # 仅抽取 K=10 相关的核心指标
         cols_k10 = ['Strategy', 'Valid Users', 'Prec@10', 'Rec@10', 'HR@10', 'F1@10', 'NDCG@10', 'MRR@10']
         df_k10_clean = df_raw[cols_k10].rename(columns={
             'Strategy': '策略', 'Valid Users': '有效测试用户', 'Prec@10': '准确率@10',
@@ -38,7 +38,7 @@ if os.path.exists(TARGET_FILE):
         })
         st.dataframe(df_k10_clean, use_container_width=True, hide_index=True)
         
-        # 放大招：利用大字号卡片高亮全场综合表现最强的算法
+        # 用大字号卡片高亮全场综合表现最强的算法
         st.markdown("##### 🏆 K=10 策略高光审计")
         m_col1, m_col2, m_col3, m_col4 = st.columns(4)
         
@@ -126,19 +126,17 @@ if os.path.exists(TARGET_FILE):
     # 4. 雷达图多维能力画像
     st.markdown("---")
     st.subheader("🕸️ 策略综合能力画像 (K=10 归一化视图)")
-    st.caption("注：由于各指标绝对值差距过大（如HR显着高于Precision），本图采用最大值归一化，展示各策略在不同维度的相对优劣。")
+    st.caption("注：由于各指标绝对值差距过大，本图采用最大值归一化，展示各策略在不同维度的相对优劣。")
     
     df_radar_base = df_plot[df_plot['K值'] == 10].copy()
     if not df_radar_base.empty:
-        # 核心魔法：对每个指标独立进行归一化
+        # 对每个指标独立进行归一化
         df_radar_base['展示数值'] = df_radar_base.groupby('指标')['数值(%)'].transform(
             lambda x: (x / x.max() * 100) if x.max() > 0 else 0
         )
         
         # 固定的轴顺序
         desired_order = ['Prec', 'Rec', 'F1', 'NDCG', 'MRR', 'HR']
-        
-        # ✨【突破核心 1/2】：计算每个策略的指标总分，用来代表图形的面积
         strategy_scores = df_radar_base.groupby('策略')['展示数值'].sum().reset_index()
         # 按照总分从大到小排序。总分大(面积大)的先画，放在最底层；总分小(面积小)的后画，浮在最顶层
         sorted_strategies = strategy_scores.sort_values(by='展示数值', ascending=False)['策略'].tolist()
